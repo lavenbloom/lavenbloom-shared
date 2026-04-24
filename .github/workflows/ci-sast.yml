@@ -45,6 +45,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ─── Install Dependencies and Run Pytest with Coverage ───
+      - name: Set up Python
+        if: inputs.service-name == 'auth-service'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies and run tests
+        if: inputs.service-name == 'auth-service'
+        run: |
+          cd ${{ inputs.service-path }}
+          if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
+          pip install pytest pytest-cov httpx
+          pytest --cov=app --cov-report=xml
+
       # ─── Run SonarQube Scan ───
       - name: Run SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
