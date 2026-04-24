@@ -1,0 +1,145 @@
+# ============================================================================
+# Reusable Workflow: Docker Publish — Tag, Build & Push
+# ============================================================================
+# Handles Docker image publishing for both develop (SHA-tagged) and main
+# (semver-tagged) branches. Features:
+#   - Semantic versioning via git tags (main branch)
+#   - SHA-based tagging (develop branch)
+#   - Duplicate image detection (skips build if tag exists)
+#   - Git tag creation for release versions
+#
+# Usage:
+#   uses: lavenbloom/lavenbloom-shared/.github/workflows/ci-docker-publish.yml@main
+# ============================================================================
+
+name: _Docker Publish — Tag, Build & Push
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Service name (used for image name and tag prefix)"
+        required: true
+        type: string
+      service-path:
+        description: "Path to the Dockerfile directory"
+        required: false
+        type: string
+        default: "."
+      environment:
+        description: "Target environment branch (develop or main)"
+        required: true
+        type: string
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+        description: "Docker Hub username"
+      DOCKER_PASSWORD:
+        required: true
+        description: "Docker Hub password or access token"
+    outputs:
+      image-tag:
+        description: "The Docker image tag that was built and pushed"
+        value: ${{ jobs.publish.outputs.tag }}
+      image-full:
+        description: "Full image reference (registry/name:tag)"
+        value: ${{ jobs.publish.outputs.full_image }}
+
+jobs:
+  publish:
+    name: Publish Image (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      full_image: ${{ steps.tag.outputs.full_image }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.service-path }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ─── Semantic Versioning (main branch only) ───
+      - name: Calculate Semantic Version (Main Only)
+        id: semver
+        if: inputs.environment == 'main'
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ github.token }}
+          tag_prefix: ${{ inputs.service-name }}-v
+          dry_run: true
+          default_bump: patch
+
+      # ─── Generate Image Tag ───
+      - name: Generate Tag
+        id: tag
+        run: |
+          if [ "${{ inputs.environment }}" = "main" ]; then
+            TAG="${{ steps.semver.outputs.new_tag }}"
+          else
+            TAG="dev-${GITHUB_SHA}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "full_image=${{ secrets.DOCKER_USERNAME }}/${{ inputs.service-name }}:$TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Image tag: $TAG"
+
+      # ─── Tag Validation (prevent tag conflicts) ───
+      - name: Validate Existing Git Tag
+        id: tag_check
+        run: |
+          TAG=${{ steps.tag.outputs.tag }}
+          git fetch --tags origin || true
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "$TAG")
+            CURRENT_COMMIT=$(git rev-parse HEAD)
+            if [ "$TAG_COMMIT" != "$CURRENT_COMMIT" ]; then
+              echo "❌ Tag exists but points to different commit!"
+              exit 1
+            fi
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ─── Docker Login ───
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      # ─── Skip if image already published ───
+      - name: Check if Image Already Exists
+        id: image_check
+        run: |
+          if docker manifest inspect ${{ steps.tag.outputs.full_image }} > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⏭️ Image already exists. Skipping build."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ─── Build ───
+      - name: Build Docker Image
+        id: docker_build
+        if: steps.image_check.outputs.exists != 'true'
+        run: |
+          docker build -t ${{ steps.tag.outputs.full_image }} .
+          echo "built=true" >> $GITHUB_OUTPUT
+
+      # ─── Push ───
+      - name: Push Docker Image
+        if: steps.docker_build.outputs.built == 'true'
+        run: |
+          docker push ${{ steps.tag.outputs.full_image }}
+          echo "✅ Pushed: ${{ steps.tag.outputs.full_image }}"
+
+      # ─── Create Git Tag (main releases only) ───
+      - name: Create Git Tag
+        if: inputs.environment == 'main' && steps.tag_check.outputs.exists != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.tag.outputs.tag }}
+          git push origin ${{ steps.tag.outputs.tag }}
+          echo "🏷️ Git tag created: ${{ steps.tag.outputs.tag }}"

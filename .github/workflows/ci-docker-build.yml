@@ -1,0 +1,82 @@
+# ============================================================================
+# Reusable Workflow: Docker Build — Temporary Build + Trivy Scan
+# ============================================================================
+# Builds a Docker image locally (never pushed) and runs Trivy vulnerability
+# scanning against it. Used during PR validation to catch image-level CVEs
+# before code is merged. Outputs whether critical issues were found.
+#
+# Usage:
+#   uses: lavenbloom/lavenbloom-shared/.github/workflows/ci-docker-build.yml@main
+# ============================================================================
+
+name: _Docker Build — Temp Build + Trivy Scan
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Service name (used for image naming and reports)"
+        required: true
+        type: string
+      service-path:
+        description: "Path to the Dockerfile directory"
+        required: false
+        type: string
+        default: "."
+    outputs:
+      trivy-critical:
+        description: "Whether CRITICAL vulnerabilities were found (true/false)"
+        value: ${{ jobs.build-scan.outputs.trivy_critical }}
+
+jobs:
+  build-scan:
+    name: Build & Scan Image
+    runs-on: ubuntu-latest
+    outputs:
+      trivy_critical: ${{ steps.trivy_check.outputs.critical_found }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.service-path }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ─── Build Temp Image (local only, never pushed) ───
+      - name: Build Docker Image (Temp)
+        run: |
+          docker build -t ${{ inputs.service-name }}:pr-test .
+          echo "✅ Temp image built: ${{ inputs.service-name }}:pr-test"
+
+      # ─── Trivy Vulnerability Scan ───
+      - name: Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ inputs.service-name }}:pr-test"
+          format: "table"
+          output: "${{ github.workspace }}/trivy-report-${{ inputs.service-name }}.txt"
+          scan-type: "image"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+
+      - name: Upload Trivy Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-${{ inputs.service-name }}
+          path: "${{ github.workspace }}/trivy-report-${{ inputs.service-name }}.txt"
+          retention-days: 14
+
+      # ─── Critical Check ───
+      - name: Check Trivy for Criticals
+        id: trivy_check
+        run: |
+          if grep -qE "CRITICAL" "${{ github.workspace }}/trivy-report-${{ inputs.service-name }}.txt"; then
+            echo "critical_found=true" >> $GITHUB_OUTPUT
+            echo "⚠️ CRITICAL vulnerabilities found!"
+          else
+            echo "critical_found=false" >> $GITHUB_OUTPUT
+            echo "✅ No critical vulnerabilities."
+          fi

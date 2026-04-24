@@ -1,0 +1,113 @@
+# ============================================================================
+# Reusable Workflow: Notify — Email Alert via Brevo
+# ============================================================================
+# Sends email notifications through the Brevo (formerly Sendinblue) API.
+# Supports both plain-text emails and emails with artifact attachments.
+# Automatically includes repository and run context in every notification.
+#
+# Usage:
+#   uses: lavenbloom/lavenbloom-shared/.github/workflows/ci-notify.yml@main
+# ============================================================================
+
+name: _Notify — Email Alert (Brevo)
+
+on:
+  workflow_call:
+    inputs:
+      subject:
+        description: "Email subject line"
+        required: true
+        type: string
+      body:
+        description: "Email body text"
+        required: true
+        type: string
+      service-name:
+        description: "Service name for context in the email"
+        required: false
+        type: string
+        default: ""
+      artifact-name:
+        description: "Name of the artifact to download and attach (optional)"
+        required: false
+        type: string
+        default: ""
+      sender-name:
+        description: "Display name for the sender"
+        required: false
+        type: string
+        default: "CI/CD Pipeline"
+      sender-email:
+        description: "Sender email address"
+        required: false
+        type: string
+        default: "lavenbloom.noreply@gmail.com"
+      recipient-email:
+        description: "Recipient email address"
+        required: false
+        type: string
+        default: "lavenbloom.alerts@gmail.com"
+    secrets:
+      BREVO_API_KEY:
+        required: true
+        description: "Brevo API key for sending emails"
+
+jobs:
+  send-email:
+    name: Send Email Alert
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─── Download Report Artifact (if provided) ───
+      - name: Download Report Artifact
+        if: inputs.artifact-name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ./report
+
+      # ─── Send Email Without Attachment ───
+      - name: Send Email (No Attachment)
+        if: inputs.artifact-name == ''
+        run: |
+          curl --request POST \
+            --url https://api.brevo.com/v3/smtp/email \
+            --header "accept: application/json" \
+            --header "api-key: $BREVO_API_KEY" \
+            --header "content-type: application/json" \
+            --data "{
+              \"sender\": {\"name\": \"${{ inputs.sender-name }}\", \"email\": \"${{ inputs.sender-email }}\"},
+              \"to\": [{\"email\": \"${{ inputs.recipient-email }}\"}],
+              \"subject\": \"${{ inputs.subject }}\",
+              \"textContent\": \"${{ inputs.body }}\n\nService: ${{ inputs.service-name }}\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }"
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+
+      # ─── Send Email With Attachment ───
+      - name: Send Email (With Attachment)
+        if: inputs.artifact-name != ''
+        run: |
+          # Find the report file (could be .html or .txt)
+          REPORT_FILE=$(find ./report -type f | head -1)
+          REPORT_NAME=$(basename "$REPORT_FILE")
+          REPORT_BASE64=$(base64 -w 0 "$REPORT_FILE")
+
+          cat > /tmp/brevo-payload.json <<PAYLOAD_EOF
+          {
+            "sender": {"name": "${{ inputs.sender-name }}", "email": "${{ inputs.sender-email }}"},
+            "to": [{"email": "${{ inputs.recipient-email }}"}],
+            "subject": "${{ inputs.subject }}",
+            "textContent": "${{ inputs.body }}\n\nService: ${{ inputs.service-name }}\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "attachment": [{"name": "$REPORT_NAME", "content": "$REPORT_BASE64"}]
+          }
+          PAYLOAD_EOF
+
+          curl --request POST \
+            --url https://api.brevo.com/v3/smtp/email \
+            --header "accept: application/json" \
+            --header "api-key: $BREVO_API_KEY" \
+            --header "content-type: application/json" \
+            --data @/tmp/brevo-payload.json
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}

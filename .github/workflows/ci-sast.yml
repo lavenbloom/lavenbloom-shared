@@ -1,0 +1,71 @@
+# ============================================================================
+# Reusable Workflow: SAST — SonarQube Static Analysis
+# ============================================================================
+# Performs static application security testing using SonarQube.
+# Checks out code with full history, runs the scan, and evaluates the
+# quality gate. Outputs the gate result for downstream decision-making.
+#
+# Usage:
+#   uses: lavenbloom/lavenbloom-shared/.github/workflows/ci-sast.yml@main
+# ============================================================================
+
+name: _SAST — SonarQube Scan
+
+on:
+  workflow_call:
+    inputs:
+      service-path:
+        description: "Path to the service source code (relative to repo root)"
+        required: false
+        type: string
+        default: "."
+    secrets:
+      SONAR_TOKEN:
+        required: true
+        description: "SonarQube authentication token"
+      SONAR_URL:
+        required: true
+        description: "SonarQube server URL"
+    outputs:
+      quality-gate:
+        description: "Quality gate result (passed/failed)"
+        value: ${{ jobs.sast.outputs.gate_status }}
+
+jobs:
+  sast:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    outputs:
+      gate_status: ${{ steps.gate.outputs.status }}
+
+    steps:
+      # ─── Checkout with full history for accurate blame/diff ───
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ─── Run SonarQube Scan ───
+      - name: Run SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        with:
+          projectBaseDir: ${{ inputs.service-path }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_URL }}
+
+      # ─── Quality Gate Evaluation ───
+      - name: SonarQube Quality Gate
+        id: gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        with:
+          scanMetadataReportFile: ${{ inputs.service-path }}/.scannerwork/report-task.txt
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      # ─── Expose gate result as output ───
+      - name: Set Gate Output
+        if: always()
+        run: |
+          echo "status=${{ steps.gate.outcome }}" >> $GITHUB_OUTPUT

@@ -1,0 +1,131 @@
+# ============================================================================
+# Reusable Workflow: SCA — Snyk Dependency Scan
+# ============================================================================
+# Performs Software Composition Analysis using Snyk to detect vulnerable
+# dependencies. Supports both Node.js and Python runtimes with automatic
+# dependency caching. Generates HTML reports uploaded as artifacts.
+#
+# Usage:
+#   uses: lavenbloom/lavenbloom-shared/.github/workflows/ci-sca.yml@main
+# ============================================================================
+
+name: _SCA — Snyk Dependency Scan
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Service name (used for artifact naming)"
+        required: true
+        type: string
+      service-path:
+        description: "Path to the service source code"
+        required: false
+        type: string
+        default: "."
+      runtime:
+        description: "Application runtime: 'node' or 'python'"
+        required: true
+        type: string
+      node-version:
+        description: "Node.js version (when runtime is 'node')"
+        required: false
+        type: string
+        default: "20"
+      python-version:
+        description: "Python version (when runtime is 'python')"
+        required: false
+        type: string
+        default: "3.11"
+    secrets:
+      SNYK_TOKEN:
+        required: true
+        description: "Snyk API authentication token"
+    outputs:
+      critical-found:
+        description: "Whether critical/high vulnerabilities were found (true/false)"
+        value: ${{ jobs.sca.outputs.critical_found }}
+
+jobs:
+  sca:
+    name: Snyk Scan (${{ inputs.runtime }})
+    runs-on: ubuntu-latest
+    outputs:
+      critical_found: ${{ steps.snyk-check.outputs.critical_found }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.service-path }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ─── Node.js Runtime Setup ───
+      - name: Setup Node.js
+        if: inputs.runtime == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: "${{ inputs.service-path }}/package-lock.json"
+
+      - name: Install Node dependencies
+        if: inputs.runtime == 'node'
+        run: npm ci
+
+      # ─── Python Runtime Setup ───
+      - name: Setup Python
+        if: inputs.runtime == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: "pip"
+
+      - name: Install Python dependencies
+        if: inputs.runtime == 'python'
+        run: pip install -r requirements.txt
+
+      # ─── Snyk Scan ───
+      - name: Setup Snyk CLI
+        uses: snyk/actions/setup@master
+
+      - name: Install snyk-to-html
+        run: npm install -g snyk-to-html
+
+      # Scan Node.js project
+      - name: Snyk Test (Node)
+        if: inputs.runtime == 'node'
+        run: snyk test --severity-threshold=high --json-file-output=snyk-report.json || true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      # Scan Python project
+      - name: Snyk Test (Python)
+        if: inputs.runtime == 'python'
+        run: snyk test --file=requirements.txt --package-manager=pip --severity-threshold=high --json-file-output=snyk-report.json || true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      # ─── Report Generation ───
+      - name: Convert Snyk report to HTML
+        run: snyk-to-html -i snyk-report.json -o snyk-report.html
+
+      - name: Upload Snyk Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snyk-report-${{ inputs.service-name }}
+          path: ${{ inputs.service-path }}/snyk-report.html
+          retention-days: 14
+
+      # ─── Critical Vulnerability Check ───
+      - name: Check for Critical Vulnerabilities
+        id: snyk-check
+        run: |
+          CRITICAL_COUNT=$(jq '[.vulnerabilities[] | select(.severity == "critical" or .severity == "high")] | length' snyk-report.json 2>/dev/null || echo "0")
+          echo "Critical/High count: $CRITICAL_COUNT"
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "critical_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "critical_found=false" >> $GITHUB_OUTPUT
+          fi

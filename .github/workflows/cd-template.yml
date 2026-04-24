@@ -1,0 +1,97 @@
+# ============================================================================
+# Reusable Workflow: CD — Update Helm Chart Image Tag
+# ============================================================================
+# GitOps-style continuous delivery. Clones the Helm charts repository,
+# updates the image tag in the target service's values.yaml using yq,
+# validates the YAML, and pushes the change. ArgoCD then detects the
+# commit and syncs the deployment automatically.
+#
+# Usage:
+#   uses: lavenbloom/lavenbloom-shared/.github/workflows/cd-template.yml@main
+# ============================================================================
+
+name: CD — Update Helm Chart
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: "Name of the service folder in the charts repository (e.g., auth-service)"
+        required: true
+        type: string
+      image-tag:
+        description: "New image tag to update in values.yaml"
+        required: true
+        type: string
+      environment:
+        description: "Target environment / branch in charts repo (main or develop)"
+        required: true
+        type: string
+      charts-repo:
+        description: "Helm charts repository (org/repo format)"
+        required: false
+        type: string
+        default: "lavenbloom/lavenbloom-charts"
+      charts-path:
+        description: "Path prefix to the service values file within the charts repo"
+        required: false
+        type: string
+        default: "charts/microservices"
+    secrets:
+      HELM_REPO_PAT:
+        required: true
+        description: "PAT with push access to the Helm charts repository"
+
+jobs:
+  update-chart:
+    name: "CD: Update ${{ inputs.service-name }} → ${{ inputs.image-tag }}"
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─── Checkout Helm Charts Repository ───
+      - name: Checkout Charts Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.charts-repo }}
+          token: ${{ secrets.HELM_REPO_PAT }}
+          path: charts
+          ref: ${{ inputs.environment }}
+
+      # ─── Install yq for YAML manipulation ───
+      - name: Setup yq
+        uses: mikefarah/yq@v4.44.1
+
+      # ─── Update image tag in values.yaml ───
+      - name: Update image tag
+        run: |
+          FILE="charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values.yaml"
+          if [ -f "$FILE" ]; then
+            echo "📝 Updating $FILE with tag ${{ inputs.image-tag }}"
+            yq -i ".image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
+          else
+            echo "::error::File not found: $FILE (Is your service-name correct?)"
+            exit 1
+          fi
+
+      # ─── Validate YAML is still well-formed ───
+      - name: Validate values.yaml
+        run: |
+          yq eval '.' "charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values.yaml" > /dev/null
+
+      # ─── Commit and Push ───
+      - name: Commit and Push changes
+        run: |
+          cd charts
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage the specific values file
+          git add "${{ inputs.charts-path }}/${{ inputs.service-name }}/values.yaml"
+
+          if git diff --staged --quiet; then
+            echo "⏭️ No changes detected (tag might already be up to date)"
+          else
+            git commit -m "cd(${{ inputs.service-name }}): update image tag to ${{ inputs.image-tag }} [${{ inputs.environment }}]"
+            git push origin ${{ inputs.environment }}
+            echo "✅ Pushed tag update for ${{ inputs.service-name }}"
+          fi
