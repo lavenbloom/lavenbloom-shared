@@ -35,6 +35,11 @@ on:
         required: true
         type: string
         default: "dev"
+      release-tag:
+        description: "Explicit release tag (used for main/prod builds)"
+        required: false
+        type: string
+        default: ""
     secrets:
       DOCKER_USERNAME:
         required: true
@@ -67,30 +72,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ─── Semantic Versioning (main branch only) ───
-      - name: Calculate Semantic Version (Main Only)
-        id: semver
-        if: inputs.environment == 'main'
-        uses: mathieudutour/github-tag-action@v6.2
-        with:
-          github_token: ${{ github.token }}
-          tag_prefix: ${{ inputs.service-name }}-v
-          dry_run: true
-          default_bump: patch
+      # # ─── Semantic Versioning (main branch only) ───
+      # - name: Calculate Semantic Version (Main Only)
+      #   id: semver
+      #   if: inputs.environment == 'main'
+      #   uses: mathieudutour/github-tag-action@v6.2
+      #   with:
+      #     github_token: ${{ github.token }}
+      #     tag_prefix: ${{ inputs.service-name }}-v
+      #     dry_run: true
+      #     default_bump: patch
+
+      # # ─── Generate Image Tag ───
+      # - name: Generate Tag
+      #   id: tag
+      #   run: |
+      #     if [ "${{ inputs.environment }}" = "main" ]; then
+      #       TAG="${{ steps.semver.outputs.new_tag }}"
+      #     else
+      #       TAG="${{ inputs.target-env }}-${GITHUB_SHA}"
+      #     fi
+      #     IMAGE_NAME="lavenbloom-${{ inputs.service-name }}" 
+      #     echo "tag=$TAG" >> $GITHUB_OUTPUT
+      #     echo "full_image=${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:$TAG" >> $GITHUB_OUTPUT
+      #     echo "🏷️ Image tag: $TAG"
 
       # ─── Generate Image Tag ───
       - name: Generate Tag
         id: tag
         run: |
           if [ "${{ inputs.environment }}" = "main" ]; then
-            TAG="${{ steps.semver.outputs.new_tag }}"
+            TAG="${{ inputs.release-tag }}"   # new input — passed in by caller
           else
             TAG="${{ inputs.target-env }}-${GITHUB_SHA}"
           fi
-          IMAGE_NAME="lavenbloom-${{ inputs.service-name }}" 
+          IMAGE_NAME="lavenbloom-${{ inputs.service-name }}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "full_image=${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:$TAG" >> $GITHUB_OUTPUT
-          echo "🏷️ Image tag: $TAG"
 
       # ─── Tag Validation (prevent tag conflicts) ───
       - name: Validate Existing Git Tag
@@ -140,12 +158,12 @@ jobs:
           docker push ${{ steps.tag.outputs.full_image }}
           echo "✅ Pushed: ${{ steps.tag.outputs.full_image }}"
 
-      # ─── Create Git Tag (main releases only) ───
-      - name: Create Git Tag
-        if: inputs.environment == 'main' && steps.tag_check.outputs.exists != 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.tag.outputs.tag }}
-          git push origin ${{ steps.tag.outputs.tag }}
-          echo "🏷️ Git tag created: ${{ steps.tag.outputs.tag }}"
+      # # ─── Create Git Tag (main releases only) ───
+      # - name: Create Git Tag
+      #   if: inputs.environment == 'main' && steps.tag_check.outputs.exists != 'true'
+      #   run: |
+      #     git config user.name "github-actions[bot]"
+      #     git config user.email "github-actions[bot]@users.noreply.github.com"
+      #     git tag ${{ steps.tag.outputs.tag }}
+      #     git push origin ${{ steps.tag.outputs.tag }}
+      #     echo "🏷️ Git tag created: ${{ steps.tag.outputs.tag }}"
