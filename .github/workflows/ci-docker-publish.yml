@@ -30,6 +30,11 @@ on:
         description: "Target environment branch (develop or main)"
         required: true
         type: string
+      target-env:
+        description: "Target environment (values-prod.yaml or values-dev.yaml)"
+        required: true
+        type: string
+        default: "dev"
     secrets:
       DOCKER_USERNAME:
         required: true
@@ -80,10 +85,11 @@ jobs:
           if [ "${{ inputs.environment }}" = "main" ]; then
             TAG="${{ steps.semver.outputs.new_tag }}"
           else
-            TAG="dev-${GITHUB_SHA}"
+            TAG="${{ inputs.target-env }}-${GITHUB_SHA}"
           fi
+          IMAGE_NAME="lavenbloom-${{ inputs.service-name }}" 
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "full_image=${{ secrets.DOCKER_USERNAME }}/${{ inputs.service-name }}:$TAG" >> $GITHUB_OUTPUT
+          echo "full_image=${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:$TAG" >> $GITHUB_OUTPUT
           echo "🏷️ Image tag: $TAG"
 
       # ─── Tag Validation (prevent tag conflicts) ───

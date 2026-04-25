@@ -27,6 +27,11 @@ on:
         description: "Target environment / branch in charts repo (main or develop)"
         required: true
         type: string
+      target-env:
+        description: "Target environment (values-prod.yaml or values-dev.yaml)"
+        required: true
+        type: string
+        default: "dev"
       charts-repo:
         description: "Helm charts repository (org/repo format)"
         required: false
@@ -36,7 +41,7 @@ on:
         description: "Path prefix to the service values file within the charts repo"
         required: false
         type: string
-        default: "charts/microservices"
+        default: "microservices"
     secrets:
       HELM_REPO_PAT:
         required: true
@@ -64,10 +69,10 @@ jobs:
       # ─── Update image tag in values.yaml ───
       - name: Update image tag
         run: |
-          FILE="charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values.yaml"
+          FILE="charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values-${{ inputs.target-env }}.yaml"
           if [ -f "$FILE" ]; then
             echo "📝 Updating $FILE with tag ${{ inputs.image-tag }}"
-            yq -i ".image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
+            yq -i ".${{ inputs.service-name }}.image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
           else
             echo "::error::File not found: $FILE (Is your service-name correct?)"
             exit 1
@@ -76,7 +81,7 @@ jobs:
       # ─── Validate YAML is still well-formed ───
       - name: Validate values.yaml
         run: |
-          yq eval '.' "charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values.yaml" > /dev/null
+          yq eval '.' "charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values-${{ inputs.target-env }}.yaml" > /dev/null
 
       # ─── Commit and Push ───
       - name: Commit and Push changes
@@ -86,12 +91,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # Stage the specific values file
-          git add "${{ inputs.charts-path }}/${{ inputs.service-name }}/values.yaml"
+          git add "${{ inputs.charts-path }}/${{ inputs.service-name }}/values-${{ inputs.target-env }}.yaml"
 
           if git diff --staged --quiet; then
             echo "⏭️ No changes detected (tag might already be up to date)"
           else
-            git commit -m "cd(${{ inputs.service-name }}): update image tag to ${{ inputs.image-tag }} [${{ inputs.environment }}]"
+            git commit -m "cd(${{ inputs.service-name }}): update image tag to ${{ inputs.image-tag }} in values-${{ inputs.target-env }}.yaml [${{ inputs.environment }}]"
             git push origin ${{ inputs.environment }}
             echo "✅ Pushed tag update for ${{ inputs.service-name }}"
           fi
