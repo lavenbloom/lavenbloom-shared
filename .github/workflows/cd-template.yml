@@ -72,7 +72,7 @@ jobs:
           FILE="charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values-${{ inputs.target-env }}.yaml"
           if [ -f "$FILE" ]; then
             echo "📝 Updating $FILE with tag ${{ inputs.image-tag }}"
-            yq -i ".${{ inputs.service-name }}.image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
+            yq -i ".\"${{ inputs.service-name }}\".image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
           else
             echo "::error::File not found: $FILE (Is your service-name correct?)"
             exit 1
