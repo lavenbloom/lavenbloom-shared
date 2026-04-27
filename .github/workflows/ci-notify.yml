@@ -1,113 +1,119 @@
 # ============================================================================
-# Reusable Workflow: Notify — Email Alert via Brevo
+# Reusable Workflow: Notify — Email Alert via SendGrid
 # ============================================================================
-# Sends email notifications through the Brevo (formerly Sendinblue) API.
-# Supports both plain-text emails and emails with artifact attachments.
-# Automatically includes repository and run context in every notification.
+# Sends failure email notifications through the SendGrid API.
+# Fires only when at least one pipeline job has failed.
+# Automatically includes repository, run context, and per-job results.
 #
 # Usage:
 #   uses: lavenbloom/lavenbloom-shared/.github/workflows/ci-notify.yml@main
 # ============================================================================
 
-name: _Notify — Email Alert (Brevo)
+name: notify
 
 on:
   workflow_call:
     inputs:
-      subject:
-        description: "Email subject line"
+      service_name:
         required: true
         type: string
-      body:
-        description: "Email body text"
-        required: true
-        type: string
-      service-name:
-        description: "Service name for context in the email"
+      git_tag:
         required: false
         type: string
-        default: ""
-      artifact-name:
-        description: "Name of the artifact to download and attach (optional)"
-        required: false
+        default: "N/A"
+      sonarqube_result:
         type: string
-        default: ""
-      sender-name:
-        description: "Display name for the sender"
-        required: false
+        default: "skipped"
+      snyk_result:
         type: string
-        default: "CI/CD Pipeline"
-      sender-email:
-        description: "Sender email address"
-        required: false
+        default: "skipped"
+      generate_tag_result:
         type: string
-        default: "lavenbloom.noreply@gmail.com"
-      recipient-email:
-        description: "Recipient email address"
-        required: false
+        default: "skipped"
+      build_result:
         type: string
-        default: "lavenbloom.alerts@gmail.com"
+        default: "skipped"
+      trivy_result:
+        type: string
+        default: "skipped"
+      push_result:
+        type: string
+        default: "skipped"
     secrets:
-      BREVO_API_KEY:
-        required: true
-        description: "Brevo API key for sending emails"
+      SENDGRID_API_KEY:
 
 jobs:
-  send-email:
-    name: Send Email Alert
+  notify:
+    name: notify
     runs-on: ubuntu-latest
-
+    # Only run if at least one job actually failed
+    if: |
+      inputs.sonarqube_result    == 'failure' ||
+      inputs.snyk_result         == 'failure' ||
+      inputs.generate_tag_result == 'failure' ||
+      inputs.build_result        == 'failure' ||
+      inputs.trivy_result        == 'failure' ||
+      inputs.push_result         == 'failure'
     steps:
-      # ─── Download Report Artifact (if provided) ───
-      - name: Download Report Artifact
-        if: inputs.artifact-name != ''
-        uses: actions/download-artifact@v4
+      - name: Build failure summary
+        id: summary
+        run: |
+          FAILED_JOBS=""
+
+          if [ "${{ inputs.sonarqube_result }}"    == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}| sonarqube | FAILED |\n"
+          fi
+          if [ "${{ inputs.snyk_result }}"         == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}| snyk | FAILED |\n"
+          fi
+          if [ "${{ inputs.generate_tag_result }}" == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}| generate-tag | FAILED |\n"
+          fi
+          if [ "${{ inputs.build_result }}"        == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}| build image | FAILED |\n"
+          fi
+          if [ "${{ inputs.trivy_result }}"        == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}| trivy | FAILED — CRITICAL CVEs detected, push blocked |\n"
+          fi
+          if [ "${{ inputs.push_result }}"         == "failure" ]; then
+            FAILED_JOBS="${FAILED_JOBS}| push | FAILED |\n"
+          fi
+
+          echo "failed_jobs<<EOF" >> $GITHUB_OUTPUT
+          printf "$FAILED_JOBS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Send failure notification
+        uses: licenseware/send-email-notification@v1
         with:
-          name: ${{ inputs.artifact-name }}
-          path: ./report
+          api-key: ${{ secrets.SENDGRID_API_KEY }}
+          subject: "CI FAILED — ${{ inputs.service_name }} (${{ github.sha }})"
+          from-email: chrissattasseril16@gmail.com
+          to-email: 307408@ust.com
+          markdown-body: |
+            ## CI Pipeline Failed — ${{ inputs.service_name }}
 
-      # ─── Send Email Without Attachment ───
-      - name: Send Email (No Attachment)
-        if: inputs.artifact-name == ''
-        run: |
-          curl --request POST \
-            --url https://api.brevo.com/v3/smtp/email \
-            --header "accept: application/json" \
-            --header "api-key: $BREVO_API_KEY" \
-            --header "content-type: application/json" \
-            --data "{
-              \"sender\": {\"name\": \"${{ inputs.sender-name }}\", \"email\": \"${{ inputs.sender-email }}\"},
-              \"to\": [{\"email\": \"${{ inputs.recipient-email }}\"}],
-              \"subject\": \"${{ inputs.subject }}\",
-              \"textContent\": \"${{ inputs.body }}\n\nService: ${{ inputs.service-name }}\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
-            }"
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+            | Detail | Value |
+            |--------|-------|
+            | **Service** | `${{ inputs.service_name }}` |
+            | **Branch** | `${{ github.ref_name }}` |
+            | **Tag** | `${{ inputs.git_tag }}` |
+            | **Actor** | ${{ github.actor }} |
+            | **Commit** | ${{ github.event.head_commit.message }} |
+            | **SHA** | `${{ github.sha }}` |
 
-      # ─── Send Email With Attachment ───
-      - name: Send Email (With Attachment)
-        if: inputs.artifact-name != ''
-        run: |
-          # Find the report file (could be .html or .txt)
-          REPORT_FILE=$(find ./report -type f | head -1)
-          REPORT_NAME=$(basename "$REPORT_FILE")
-          REPORT_BASE64=$(base64 -w 0 "$REPORT_FILE")
+            ## Failed Jobs
+            ${{ steps.summary.outputs.failed_jobs }}
 
-          cat > /tmp/brevo-payload.json <<PAYLOAD_EOF
-          {
-            "sender": {"name": "${{ inputs.sender-name }}", "email": "${{ inputs.sender-email }}"},
-            "to": [{"email": "${{ inputs.recipient-email }}"}],
-            "subject": "${{ inputs.subject }}",
-            "textContent": "${{ inputs.body }}\n\nService: ${{ inputs.service-name }}\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-            "attachment": [{"name": "$REPORT_NAME", "content": "$REPORT_BASE64"}]
-          }
-          PAYLOAD_EOF
+            ## All Job Results
 
-          curl --request POST \
-            --url https://api.brevo.com/v3/smtp/email \
-            --header "accept: application/json" \
-            --header "api-key: $BREVO_API_KEY" \
-            --header "content-type: application/json" \
-            --data @/tmp/brevo-payload.json
-        env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+            | Job | Result |
+            |-----|--------|
+            | sonarqube | **${{ inputs.sonarqube_result }}** |
+            | snyk | **${{ inputs.snyk_result }}** |
+            | generate-tag | **${{ inputs.generate_tag_result }}** |
+            | build image | **${{ inputs.build_result }}** |
+            | trivy | **${{ inputs.trivy_result }}** |
+            | push | **${{ inputs.push_result }}** |
+
+            [View Full Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
