@@ -19,6 +19,10 @@ on:
         description: "Name of the service folder in the charts repository (e.g., auth-service)"
         required: true
         type: string
+      service-key:
+        description: "YAML root key in values.yaml (e.g., authService)"
+        required: true
+        type: string
       image-tag:
         description: "New image tag to update in values.yaml"
         required: true
@@ -68,26 +72,14 @@ jobs:
 
       # ─── Update image tag in values.yaml ───
       - name: Update image tag
-        # run: |
-        #   FILE="charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values-${{ inputs.target-env }}.yaml"
-        #   if [ -f "$FILE" ]; then
-        #     echo "📝 Updating $FILE with tag ${{ inputs.image-tag }}"
-        #     yq -i ".\"${{ inputs.service-name }}\".image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
-        #   else
-        #     echo "::error::File not found: $FILE (Is your service-name correct?)"
-        #     exit 1
-        #   fi
-
         run: |
           FILE="charts/${{ inputs.charts-path }}/${{ inputs.service-name }}/values-${{ inputs.target-env }}.yaml"
           if [ -f "$FILE" ]; then
-            # Check key exists before updating
-            CURRENT=$(yq ".\"${{ inputs.service-name }}\".image.tag" "$FILE")
-            if [ "$CURRENT" = "null" ]; then
-              echo "::error::Key '${{ inputs.service-name }}.image.tag' not found in $FILE"
-              exit 1
-            fi
+            echo "📝 Updating $FILE with tag ${{ inputs.image-tag }}"
             yq -i ".\"${{ inputs.service-name }}\".image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
+          else
+            echo "::error::File not found: $FILE (Is your service-name correct?)"
+            exit 1
           fi
 
       # ─── Validate YAML is still well-formed ───
